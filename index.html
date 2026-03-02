@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="pl">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HipsoCreator — Edytor Terenu 3D</title>
+  <meta name="description"
+    content="Interaktywny edytor terenu 3D z eksportem warstw hipsometrycznych do PDF/PNG. Stwórz fizyczny model terenu." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@300;400;500;600&family=Playfair+Display:wght@400;600;700&display=swap"
+    rel="stylesheet" />
+</head>
+
+<body>
+  <!-- TOOLBAR -->
+  <header id="toolbar" class="toolbar">
+    <div class="toolbar__brand">
+      <svg class="toolbar__logo" viewBox="0 0 28 28" fill="none">
+        <rect x="2" y="18" width="24" height="4" rx="1" fill="var(--layer-1)" />
+        <rect x="4" y="13" width="20" height="4" rx="1" fill="var(--layer-3)" />
+        <rect x="6" y="8" width="16" height="4" rx="1" fill="var(--layer-5)" />
+        <rect x="9" y="3" width="10" height="4" rx="1" fill="var(--layer-7)" />
+      </svg>
+      <h1 class="toolbar__title">HipsoCreator</h1>
+    </div>
+
+    <div class="toolbar__actions">
+      <div class="toolbar__group">
+        <button id="btn-undo" class="toolbar__btn" title="Cofnij (Ctrl+Z)" disabled>
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M4 10h10a4 4 0 000-8H9M4 10l3-3M4 10l3 3" />
+          </svg>
+        </button>
+        <button id="btn-redo" class="toolbar__btn" title="Ponów (Ctrl+Y)" disabled>
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M16 10H6a4 4 0 010-8h5M16 10l-3-3M16 10l-3 3" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="toolbar__separator"></div>
+
+      <div class="toolbar__group">
+        <button id="btn-view-perspective" class="toolbar__btn toolbar__btn--active" title="Perspektywa">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M3 15l7-2 7 2M3 15V7l7-4 7 4v8M10 3v10" />
+          </svg>
+        </button>
+        <button id="btn-view-top" class="toolbar__btn" title="Widok z góry">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="3" y="3" width="14" height="14" rx="1" />
+            <line x1="10" y1="3" x2="10" y2="17" />
+            <line x1="3" y1="10" x2="17" y2="10" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="toolbar__separator"></div>
+
+      <div class="toolbar__group">
+        <button id="btn-mode-sculpt" class="toolbar__btn toolbar__btn--active" title="Tryb rzeźbienia">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M15 3l2 2-10 10H5v-2L15 3z" />
+          </svg>
+        </button>
+        <button id="btn-mode-layers" class="toolbar__btn" title="Podgląd warstw">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M2 14l8 4 8-4M2 10l8 4 8-4M2 6l8 4 8-4L10 2 2 6z" />
+          </svg>
+        </button>
+        <button id="btn-mode-export" class="toolbar__btn" title="Eksport">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M10 3v10M10 13l-3-3M10 13l3-3M4 17h12" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="toolbar__separator"></div>
+
+      <div class="toolbar__group">
+        <button id="btn-import" class="toolbar__btn" title="Import heightmap">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M3 13l4-4 3 3 4-5 3 3M3 17h14a1 1 0 001-1V4a1 1 0 00-1-1H3a1 1 0 00-1 1v12a1 1 0 001 1z" />
+          </svg>
+        </button>
+        <button id="btn-reset" class="toolbar__btn" title="Resetuj teren">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M4 4l12 12M4 16L16 4" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN CONTENT -->
+  <main id="app" class="app">
+    <!-- LEFT PANEL — Tools -->
+    <aside id="panel-left" class="panel panel--left">
+      <div class="panel__header">
+        <h2 class="panel__title">Narzędzia</h2>
+      </div>
+
+      <div class="panel__content">
+        <div class="tool-group">
+          <button class="tool-btn tool-btn--active" data-tool="raise" title="Podnieś teren">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M12 4l8 12H4L12 4z" />
+            </svg>
+            <span>Podnieś</span>
+          </button>
+          <button class="tool-btn" data-tool="lower" title="Obniż teren">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M12 20l-8-12h16L12 20z" />
+            </svg>
+            <span>Obniż</span>
+          </button>
+          <button class="tool-btn" data-tool="smooth" title="Wygładź teren">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M3 12c3-4 6 4 9 0s6 4 9 0" />
+            </svg>
+            <span>Wygładź</span>
+          </button>
+          <button class="tool-btn" data-tool="flatten" title="Spłaszcz teren">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <line x1="3" y1="12" x2="21" y2="12" />
+              <line x1="3" y1="16" x2="21" y2="16" />
+            </svg>
+            <span>Spłaszcz</span>
+          </button>
+          <button class="tool-btn" data-tool="plateau" title="Płaskowyż">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <polyline points="3,18 6,8 18,8 21,18" />
+            </svg>
+            <span>Płaskowyż</span>
+          </button>
+        </div>
+
+        <div class="tool-params">
+          <label class="param">
+            <span class="param__label">Promień <span class="param__value" id="val-radius">15</span></span>
+            <input type="range" id="tool-radius" class="param__slider" min="1" max="50" value="15" />
+          </label>
+          <label class="param">
+            <span class="param__label">Siła <span class="param__value" id="val-strength">30</span></span>
+            <input type="range" id="tool-strength" class="param__slider" min="1" max="100" value="30" />
+          </label>
+          <label class="param">
+            <span class="param__label">Zanikanie</span>
+            <select id="tool-falloff" class="param__select">
+              <option value="smooth" selected>Gładkie</option>
+              <option value="linear">Liniowe</option>
+              <option value="sharp">Ostre</option>
+            </select>
+          </label>
+        </div>
+      </div>
+    </aside>
+
+    <!-- VIEWPORT -->
+    <div id="viewport" class="viewport">
+      <canvas id="canvas3d"></canvas>
+      <div id="viewport-overlay" class="viewport__overlay"></div>
+    </div>
+
+    <!-- RIGHT PANEL — Layers -->
+    <aside id="panel-right" class="panel panel--right">
+      <div class="panel__header">
+        <h2 class="panel__title">Warstwy</h2>
+      </div>
+
+      <div class="panel__content">
+        <!-- Model config -->
+        <div class="config-section">
+          <h3 class="config-section__title">Model</h3>
+          <label class="param">
+            <span class="param__label">Szerokość (mm)</span>
+            <input type="number" id="cfg-width" class="param__input" value="200" min="50" max="500" step="10" />
+          </label>
+          <label class="param">
+            <span class="param__label">Głębokość (mm)</span>
+            <input type="number" id="cfg-depth" class="param__input" value="200" min="50" max="500" step="10" />
+          </label>
+          <label class="param">
+            <span class="param__label">Maks. wysokość (mm)</span>
+            <input type="number" id="cfg-height" class="param__input" value="100" min="10" max="300" step="5" />
+          </label>
+          <label class="param">
+            <span class="param__label">Rozdzielczość siatki</span>
+            <select id="cfg-resolution" class="param__select">
+              <option value="64">64 × 64</option>
+              <option value="128" selected>128 × 128</option>
+              <option value="256">256 × 256</option>
+            </select>
+          </label>
+          <label class="param">
+            <span class="param__label">Poziom morza <span class="param__value" id="val-sealevel">0</span>%</span>
+            <input type="range" id="cfg-sealevel" class="param__slider" min="0" max="80" value="0" />
+          </label>
+        </div>
+
+        <!-- Layer config -->
+        <div class="config-section">
+          <h3 class="config-section__title">Konfiguracja warstw</h3>
+          <label class="param">
+            <span class="param__label">Liczba warstw <span class="param__value" id="val-layers">8</span></span>
+            <input type="range" id="cfg-layers" class="param__slider" min="2" max="20" value="8" />
+          </label>
+          <label class="param">
+            <span class="param__label">Grubość warstwy (mm)</span>
+            <input type="number" id="cfg-thickness" class="param__input" value="5" min="1" max="50" step="1" />
+          </label>
+        </div>
+
+        <!-- Color presets -->
+        <div class="config-section">
+          <h3 class="config-section__title">Paleta kolorów</h3>
+          <div class="preset-group">
+            <button class="preset-btn preset-btn--active" data-preset="classic" title="Klasyczny hipsometryczny">
+              <span class="preset-btn__swatch"
+                style="background: linear-gradient(to right, #2D6A4F, #52B788, #FEFAE0, #DDA15E, #9B2226)"></span>
+              <span>Klasyczny</span>
+            </button>
+            <button class="preset-btn" data-preset="bathymetric" title="Batymetryczny">
+              <span class="preset-btn__swatch"
+                style="background: linear-gradient(to right, #03045E, #0077B6, #00B4D8, #90E0EF, #CAF0F8)"></span>
+              <span>Batymetryczny</span>
+            </button>
+            <button class="preset-btn" data-preset="mono" title="Monochromatyczny">
+              <span class="preset-btn__swatch"
+                style="background: linear-gradient(to right, #1a1a2e, #3a3a5e, #5a5a8e, #8a8abe, #babaf0)"></span>
+              <span>Mono</span>
+            </button>
+            <button class="preset-btn" data-preset="earth" title="Ziemisty">
+              <span class="preset-btn__swatch"
+                style="background: linear-gradient(to right, #3d2b1f, #6b4226, #a0522d, #c9a96e, #f5f0e1)"></span>
+              <span>Ziemisty</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Layer list -->
+        <div class="config-section">
+          <h3 class="config-section__title">Lista warstw</h3>
+          <div id="layer-list" class="layer-list">
+            <!-- Generated dynamically -->
+          </div>
+        </div>
+
+        <!-- Exploded view slider -->
+        <div class="config-section" id="exploded-section" style="display:none">
+          <h3 class="config-section__title">Widok rozłożony</h3>
+          <label class="param">
+            <span class="param__label">Rozsunięcie <span class="param__value" id="val-explode">50</span>%</span>
+            <input type="range" id="cfg-explode" class="param__slider" min="0" max="100" value="50" />
+          </label>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- STATUS BAR -->
+  <footer id="statusbar" class="statusbar">
+    <span class="statusbar__item" id="status-pos">X: 0 Z: 0</span>
+    <span class="statusbar__item" id="status-height">H: 0mm</span>
+    <span class="statusbar__item" id="status-layer">Warstwa: —</span>
+    <span class="statusbar__item" id="status-verts">Wierzchołki: 16 384</span>
+  </footer>
+
+  <!-- EXPORT MODAL -->
+  <div id="export-modal" class="modal" style="display:none">
+    <div class="modal__backdrop"></div>
+    <div class="modal__content">
+      <div class="modal__header">
+        <h2>Eksport warstw</h2>
+        <button id="export-close" class="modal__close">&times;</button>
+      </div>
+      <div class="modal__body">
+        <label class="param">
+          <span class="param__label">Format</span>
+          <select id="export-format" class="param__select">
+            <option value="pdf">PDF (wielostronicowy)</option>
+            <option value="png">PNG (osobne pliki)</option>
+          </select>
+        </label>
+        <label class="param">
+          <span class="param__label">Rozmiar papieru</span>
+          <select id="export-paper" class="param__select">
+            <option value="a4" selected>A4</option>
+            <option value="a3">A3</option>
+          </select>
+        </label>
+        <label class="param">
+          <span class="param__label">Skala</span>
+          <select id="export-scale" class="param__select">
+            <option value="1" selected>1:1</option>
+            <option value="fit">Dopasuj do strony</option>
+          </select>
+        </label>
+        <label class="param">
+          <span class="param__label">Siatka w tle</span>
+          <input type="checkbox" id="export-grid" checked />
+        </label>
+
+        <div class="export-preview" id="export-preview">
+          <p class="export-preview__label">Podgląd warstwy 1</p>
+          <canvas id="export-canvas" width="400" height="300"></canvas>
+        </div>
+
+        <button id="btn-export-go" class="btn btn--primary">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" style="width:18px;height:18px">
+            <path d="M10 3v10M10 13l-3-3M10 13l3-3M4 17h12" />
+          </svg>
+          Eksportuj
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- HEIGHTMAP IMPORT -->
+  <input type="file" id="heightmap-input" accept="image/*" style="display:none" />
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+
+</html>
