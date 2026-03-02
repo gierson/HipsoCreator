@@ -1,5 +1,7 @@
 # 🏔️ HipsoCreator — Edytor Terenu 3D
 
+> **[🌐 Live Demo](https://gierson.github.io/HipsoCreator/)**
+
 Interaktywny edytor terenu 3D do tworzenia warstwowych modeli hipsometrycznych. Wyrzeźb teren w przeglądarce, skonfiguruj warstwy kolorystyczne, a następnie wyeksportuj kontury do PDF/PNG — gotowe szablony do wycięcia i złożenia fizycznego modelu terenu.
 
 ![HipsoCreator — widok aplikacji](docs/screenshot.png)
