@@ -12,6 +12,62 @@ type AppMode = 'sculpt' | 'layers' | 'export';
 let currentMode: AppMode = 'sculpt';
 let explodedAmount = 0.5;
 
+// ─── LocalStorage Persistence ───
+const STORAGE_KEY = 'hipso-creator-state';
+
+interface SavedState {
+  heightData: number[];
+  resolution: number;
+  layerCount: number;
+  presetKey: string;
+  seaLevel: number;
+  widthMM: number;
+  depthMM: number;
+  heightMM: number;
+  thicknessMM: number;
+  layerColors: string[];
+}
+
+let saveTimeout: ReturnType<typeof setTimeout> | null = null;
+
+function saveState() {
+  // Debounce — avoid excessive writes during sculpting
+  if (saveTimeout) clearTimeout(saveTimeout);
+  saveTimeout = setTimeout(() => {
+    try {
+      const state: SavedState = {
+        heightData: Array.from(terrain.heightData),
+        resolution: terrain.resolution,
+        layerCount: terrain.layerCount,
+        presetKey: terrain.presetKey,
+        seaLevel: terrain.seaLevel,
+        widthMM: parseFloat((document.getElementById('cfg-width') as HTMLInputElement).value),
+        depthMM: parseFloat((document.getElementById('cfg-depth') as HTMLInputElement).value),
+        heightMM: parseFloat((document.getElementById('cfg-height') as HTMLInputElement).value),
+        thicknessMM: parseFloat((document.getElementById('cfg-thickness') as HTMLInputElement).value),
+        layerColors: [...terrain.layerColors],
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch (e) {
+      console.warn('Failed to save state:', e);
+    }
+  }, 500);
+}
+
+function clearSavedState() {
+  localStorage.removeItem(STORAGE_KEY);
+}
+
+function loadSavedState(): SavedState | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as SavedState;
+  } catch {
+    return null;
+  }
+}
+
 // ─── Init ───
 const canvas = document.getElementById('canvas3d') as HTMLCanvasElement;
 const scene = new SceneManager(canvas);
@@ -214,6 +270,7 @@ const btnRedo = document.getElementById('btn-redo') as HTMLButtonElement;
 editor.onModified = () => {
   undoManager.push(new Float32Array(terrain.heightData));
   updateUndoButtons();
+  saveState();
 };
 
 function updateUndoButtons() {
@@ -276,6 +333,7 @@ document.getElementById('btn-reset')!.addEventListener('click', () => {
     undoManager.clear();
     undoManager.push(new Float32Array(terrain.heightData));
     updateUndoButtons();
+    clearSavedState();
   }
 });
 
@@ -294,6 +352,7 @@ document.getElementById('heightmap-input')!.addEventListener('change', async (e)
     terrain.applyHeightData();
     undoManager.push(new Float32Array(terrain.heightData));
     updateUndoButtons();
+    saveState();
   } catch (err) {
     console.error('Failed to load heightmap:', err);
   }
@@ -305,6 +364,10 @@ const cfgLayers = document.getElementById('cfg-layers') as HTMLInputElement;
 const valLayers = document.getElementById('val-layers')!;
 const cfgResolution = document.getElementById('cfg-resolution') as HTMLSelectElement;
 const layerListEl = document.getElementById('layer-list')!;
+const cfgWidth = document.getElementById('cfg-width') as HTMLInputElement;
+const cfgDepth = document.getElementById('cfg-depth') as HTMLInputElement;
+const cfgHeight = document.getElementById('cfg-height') as HTMLInputElement;
+const cfgThickness = document.getElementById('cfg-thickness') as HTMLInputElement;
 
 function rebuildLayerList() {
   layerListEl.innerHTML = '';
@@ -335,6 +398,7 @@ function rebuildLayerList() {
       terrain.layerColors[i] = colorInput.value;
       colorDiv.style.background = colorInput.value;
       terrain.applyHeightData();
+      saveState();
     });
 
     layerListEl.appendChild(item);
@@ -348,6 +412,8 @@ cfgLayers.addEventListener('input', () => {
   terrain.updateLayerColors();
   terrain.applyHeightData();
   rebuildLayerList();
+  syncThicknessFromLayers();
+  saveState();
 });
 
 // Preset selection
@@ -359,6 +425,7 @@ document.querySelectorAll<HTMLButtonElement>('.preset-btn[data-preset]').forEach
     terrain.updateLayerColors();
     terrain.applyHeightData();
     rebuildLayerList();
+    saveState();
   });
 });
 
@@ -370,6 +437,7 @@ cfgResolution.addEventListener('change', () => {
   undoManager.push(new Float32Array(terrain.heightData));
   updateUndoButtons();
   (document.getElementById('status-verts')!).textContent = `Wierzchołki: ${(r * r).toLocaleString('pl-PL')}`;
+  saveState();
 });
 
 // Sea level slider
@@ -383,6 +451,7 @@ cfgSeaLevel.addEventListener('input', () => {
   terrain.applyHeightData();
   updateWaterPlane();
   rebuildLayerList();
+  saveState();
 });
 
 // Exploded view slider
@@ -393,6 +462,94 @@ document.getElementById('cfg-explode')?.addEventListener('input', (e) => {
   updateExplodedPositions();
 });
 
+// ─── Model Dimension Controls ───
+
+/** Sync layer count from thickness: layerCount = floor(maxHeight / thickness) */
+function syncLayersFromThickness() {
+  const maxH = parseFloat(cfgHeight.value);
+  const thick = parseFloat(cfgThickness.value);
+  if (thick <= 0 || maxH <= 0) return;
+  const n = Math.max(2, Math.min(20, Math.floor(maxH / thick)));
+  cfgLayers.value = String(n);
+  valLayers.textContent = String(n);
+  terrain.layerCount = n;
+  terrain.updateLayerColors();
+  terrain.applyHeightData();
+  rebuildLayerList();
+}
+
+/** Sync thickness from layer count: thickness = maxHeight / layerCount */
+function syncThicknessFromLayers() {
+  const maxH = parseFloat(cfgHeight.value);
+  const n = terrain.layerCount;
+  if (n <= 0) return;
+  cfgThickness.value = (maxH / n).toFixed(1);
+}
+
+// Width / Depth → visual proportions via mesh.scale
+function updateTerrainDimensions() {
+  const w = parseFloat(cfgWidth.value);
+  const d = parseFloat(cfgDepth.value);
+  terrain.updateTerrainScale(w, d);
+  // Scale water plane proportionally
+  const maxDim = Math.max(w, d);
+  waterPlane.scale.set(w / maxDim, 1, d / maxDim);
+}
+
+// Size presets (A4, A3, Square)
+const SIZE_PRESETS: Record<string, [number, number]> = {
+  a4: [210, 297],
+  a3: [297, 420],
+  square: [200, 200],
+};
+
+document.querySelectorAll<HTMLButtonElement>('.size-preset-btn[data-size]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const key = btn.dataset.size!;
+    const preset = SIZE_PRESETS[key];
+    if (!preset) return;
+
+    // Update active state
+    document.querySelectorAll('.size-preset-btn').forEach(b => b.classList.remove('size-preset-btn--active'));
+    btn.classList.add('size-preset-btn--active');
+
+    // Set values
+    cfgWidth.value = String(preset[0]);
+    cfgDepth.value = String(preset[1]);
+    updateTerrainDimensions();
+    rebuildLayerList();
+    saveState();
+  });
+});
+
+cfgWidth.addEventListener('input', () => {
+  // Clear active preset when manual edit
+  document.querySelectorAll('.size-preset-btn').forEach(b => b.classList.remove('size-preset-btn--active'));
+  updateTerrainDimensions();
+  saveState();
+});
+cfgDepth.addEventListener('input', () => {
+  document.querySelectorAll('.size-preset-btn').forEach(b => b.classList.remove('size-preset-btn--active'));
+  updateTerrainDimensions();
+  saveState();
+});
+
+// Max height → terrain height scale (100mm default → 5 Three.js units)
+cfgHeight.addEventListener('input', () => {
+  const maxH = parseFloat(cfgHeight.value);
+  terrain.terrainHeightScale = maxH / 20;
+  terrain.applyHeightData();
+  updateWaterPlane();
+  syncLayersFromThickness();
+  saveState();
+});
+
+// Layer thickness → sync layer count
+cfgThickness.addEventListener('input', () => {
+  syncLayersFromThickness();
+  saveState();
+});
+
 // ─── Export Modal ───
 function getExportOptions(): ExportOptions {
   return {
@@ -400,10 +557,10 @@ function getExportOptions(): ExportOptions {
     paperSize: (document.getElementById('export-paper') as HTMLSelectElement).value as 'a4' | 'a3',
     scale: (document.getElementById('export-scale') as HTMLSelectElement).value as '1' | 'fit',
     showGrid: (document.getElementById('export-grid') as HTMLInputElement).checked,
-    terrainWidthMM: parseFloat((document.getElementById('cfg-width') as HTMLInputElement).value),
-    terrainDepthMM: parseFloat((document.getElementById('cfg-depth') as HTMLInputElement).value),
-    terrainHeightMM: parseFloat((document.getElementById('cfg-height') as HTMLInputElement).value),
-    layerThicknessMM: parseFloat((document.getElementById('cfg-thickness') as HTMLInputElement).value),
+    terrainWidthMM: parseFloat(cfgWidth.value),
+    terrainDepthMM: parseFloat(cfgDepth.value),
+    terrainHeightMM: parseFloat(cfgHeight.value),
+    layerThicknessMM: parseFloat(cfgThickness.value),
   };
 }
 
@@ -470,6 +627,57 @@ function animate() {
       statusLayer.textContent = `Warstwa: ${info.layer}`;
     }
   }
+}
+
+// ─── Restore Saved State ───
+const savedState = loadSavedState();
+if (savedState) {
+  // Resolution — must rebuild geometry if different
+  if (savedState.resolution !== terrain.resolution) {
+    terrain.rebuild(savedState.resolution);
+    cfgResolution.value = String(savedState.resolution);
+  }
+
+  // Restore heightData
+  terrain.heightData.set(new Float32Array(savedState.heightData));
+
+  // Restore settings
+  terrain.layerCount = savedState.layerCount;
+  terrain.presetKey = savedState.presetKey;
+  terrain.seaLevel = savedState.seaLevel;
+  terrain.layerColors = savedState.layerColors;
+
+  // Restore UI inputs
+  cfgWidth.value = String(savedState.widthMM);
+  cfgDepth.value = String(savedState.depthMM);
+  cfgHeight.value = String(savedState.heightMM);
+  cfgThickness.value = String(savedState.thicknessMM);
+  cfgLayers.value = String(savedState.layerCount);
+  valLayers.textContent = String(savedState.layerCount);
+  (document.getElementById('cfg-sealevel') as HTMLInputElement).value = String(Math.round(savedState.seaLevel * 100));
+  (document.getElementById('val-sealevel')!).textContent = String(Math.round(savedState.seaLevel * 100));
+
+  // Restore height scale
+  terrain.terrainHeightScale = savedState.heightMM / 20;
+
+  // Apply to geometry
+  terrain.applyHeightData();
+  terrain.updateTerrainScale(savedState.widthMM, savedState.depthMM);
+  updateWaterPlane();
+
+  // Scale water plane
+  const maxDim = Math.max(savedState.widthMM, savedState.depthMM);
+  waterPlane.scale.set(savedState.widthMM / maxDim, 1, savedState.depthMM / maxDim);
+
+  // Activate correct preset button
+  document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('preset-btn--active'));
+  const activePreset = document.querySelector(`.preset-btn[data-preset="${savedState.presetKey}"]`);
+  activePreset?.classList.add('preset-btn--active');
+
+  // Reinit undo
+  undoManager.clear();
+  undoManager.push(new Float32Array(terrain.heightData));
+  updateUndoButtons();
 }
 
 // ─── Init UI ───

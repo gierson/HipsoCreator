@@ -173,6 +173,14 @@ export class TerrainMesh {
         this.applyHeightData();
     }
 
+    /** Resize terrain proportions visually (scale-based, no geometry rebuild) */
+    updateTerrainScale(widthMM: number, depthMM: number) {
+        const maxDim = Math.max(widthMM, depthMM);
+        const scaleX = widthMM / maxDim;
+        const scaleZ = depthMM / maxDim;
+        this.mesh.scale.set(scaleX, 1, scaleZ);
+    }
+
     dispose() {
         this.geometry.dispose();
         (this.mesh.material as THREE.Material).dispose();

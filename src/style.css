@@ -371,6 +371,43 @@ body::before {
   border-color: var(--accent-primary);
 }
 
+/* --- Size Presets --- */
+.size-presets {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.size-presets__label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-right: 2px;
+}
+
+.size-preset-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  transition: all var(--transition-fast);
+}
+.size-preset-btn:hover {
+  border-color: var(--border-active);
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+}
+.size-preset-btn--active {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+  background: rgba(212, 165, 116, 0.08);
+}
+
 /* --- Preset Buttons --- */
 .preset-group {
   display: flex;
