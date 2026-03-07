@@ -1,6 +1,8 @@
 import { jsPDF } from 'jspdf';
 import { TerrainMesh } from '../terrain/TerrainMesh';
 import { marchingSquares } from '../utils/MarchingSquares';
+import { processContours } from '../utils/ContourUtils';
+import type { Contour } from '../utils/MarchingSquares';
 
 export interface ExportOptions {
     format: 'pdf' | 'png';
@@ -26,6 +28,73 @@ export class LayerExporter {
         this.terrain = terrain;
     }
 
+    /**
+     * Get processed contours for a layer:
+     * Marching Squares → Douglas-Peucker → Chaikin smoothing
+     */
+    private getContours(layerIdx: number): Contour[] {
+        const res = this.terrain.resolution;
+        const n = this.terrain.layerCount;
+        const threshold = layerIdx / n;
+
+        const raw = marchingSquares(this.terrain.heightData, res, res, threshold);
+        // DP epsilon: 0.5 grid units; Chaikin iterations: 3
+        return processContours(raw, 0.5, 3);
+    }
+
+    /**
+     * Draw a closed smooth contour polygon on a 2D canvas context.
+     * Applies fill + stroke for a clean cutting template look.
+     */
+    private drawContours(
+        ctx: CanvasRenderingContext2D,
+        contours: Contour[],
+        offsetX: number,
+        offsetY: number,
+        scaleX: number,
+        scaleY: number,
+        color: string,
+        forExport: boolean
+    ) {
+        // Fill: very light tint of the layer color so the cut area is readable
+        const hexToRgba = (hex: string, alpha: number): string => {
+            const r = parseInt(hex.slice(1, 3), 16);
+            const g = parseInt(hex.slice(3, 5), 16);
+            const b = parseInt(hex.slice(5, 7), 16);
+            return `rgba(${r},${g},${b},${alpha})`;
+        };
+
+        // Fill pass (very light, non-distracting)
+        ctx.fillStyle = hexToRgba(color.length === 7 ? color : '#888888', 0.08);
+        for (const contour of contours) {
+            if (contour.length < 3) continue;
+            ctx.beginPath();
+            ctx.moveTo(offsetX + contour[0].x * scaleX, offsetY + contour[0].y * scaleY);
+            for (let i = 1; i < contour.length; i++) {
+                ctx.lineTo(offsetX + contour[i].x * scaleX, offsetY + contour[i].y * scaleY);
+            }
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        // Stroke pass (solid contour line)
+        ctx.strokeStyle = '#1a1a1a';
+        ctx.lineWidth = forExport ? 0.8 : 1.5;
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+
+        for (const contour of contours) {
+            if (contour.length < 2) continue;
+            ctx.beginPath();
+            ctx.moveTo(offsetX + contour[0].x * scaleX, offsetY + contour[0].y * scaleY);
+            for (let i = 1; i < contour.length; i++) {
+                ctx.lineTo(offsetX + contour[i].x * scaleX, offsetY + contour[i].y * scaleY);
+            }
+            ctx.closePath();
+            ctx.stroke();
+        }
+    }
+
     /** Draw a single layer on a 2D canvas — contour only, no fill */
     drawLayerOnCanvas(
         ctx: CanvasRenderingContext2D,
@@ -37,7 +106,6 @@ export class LayerExporter {
     ) {
         const res = this.terrain.resolution;
         const n = this.terrain.layerCount;
-        const threshold = layerIdx / n;
 
         // Clear
         ctx.fillStyle = '#ffffff';
@@ -83,15 +151,15 @@ export class LayerExporter {
         const offsetY = margin + (availH - imgH) / 2;
 
         // Terrain outline (dashed border)
-        ctx.strokeStyle = '#bbbbbb';
-        ctx.lineWidth = 0.5;
+        ctx.strokeStyle = '#cccccc';
+        ctx.lineWidth = 0.4;
         ctx.setLineDash([3, 3]);
         ctx.strokeRect(offsetX, offsetY, imgW, imgH);
         ctx.setLineDash([]);
 
         // Crosshair marks in corners
-        ctx.strokeStyle = '#444';
-        ctx.lineWidth = 0.4;
+        ctx.strokeStyle = '#555';
+        ctx.lineWidth = 0.5;
         const markLen = forExport ? 6 : 4;
         const corners = [
             [offsetX, offsetY],
@@ -108,34 +176,22 @@ export class LayerExporter {
             ctx.stroke();
         }
 
-        // Draw contour line ONLY (no fill)
-        const contours = marchingSquares(this.terrain.heightData, res, res, threshold);
-        ctx.strokeStyle = '#1a1a1a';
-        ctx.lineWidth = forExport ? 1.0 : 1.5;
-
+        // Draw contours: MS → DP → Chaikin → canvas
+        const color = this.terrain.layerColors[layerIdx] || '#888888';
         const scaleXGrid = (opts.terrainWidthMM * scale) / (res - 1);
         const scaleYGrid = (opts.terrainDepthMM * scale) / (res - 1);
 
-        for (const contour of contours) {
-            if (contour.length < 2) continue;
-            ctx.beginPath();
-            ctx.moveTo(offsetX + contour[0].x * scaleXGrid, offsetY + contour[0].y * scaleYGrid);
-            for (let i = 1; i < contour.length; i++) {
-                ctx.lineTo(offsetX + contour[i].x * scaleXGrid, offsetY + contour[i].y * scaleYGrid);
-            }
-            ctx.stroke();
-        }
+        const contours = this.getContours(layerIdx);
+        this.drawContours(ctx, contours, offsetX, offsetY, scaleXGrid, scaleYGrid, color, forExport);
 
-        // ── Footer: label on left, color swatch on right ──
+        // ── Footer ──────────────────────────────────────────────────────────
         const footerY = canvasH - margin;
-        const color = this.terrain.layerColors[layerIdx] || '#888';
-
-        // Left side: layer name + height range
         const minHmm = ((layerIdx / n) * opts.terrainHeightMM).toFixed(1);
         const maxHmm = (((layerIdx + 1) / n) * opts.terrainHeightMM).toFixed(1);
         const labelFont = forExport ? '8px sans-serif' : '11px JetBrains Mono, monospace';
         const labelFontSmall = forExport ? '6.5px sans-serif' : '9px JetBrains Mono, monospace';
 
+        // Layer name + height range
         ctx.fillStyle = '#222';
         ctx.font = labelFont;
         ctx.textAlign = 'left';
@@ -144,20 +200,18 @@ export class LayerExporter {
         ctx.fillStyle = '#666';
         ctx.fillText(`Wysokość: ${minHmm}–${maxHmm} mm`, margin, footerY);
 
-        // Right side: color swatch + hex code
+        // Color swatch + hex
         const swatchW = forExport ? 30 : 24;
         const swatchH = forExport ? 12 : 10;
         const swatchX = canvasW - margin - swatchW;
         const swatchY = footerY - swatchH - 4;
 
-        // Swatch rectangle
         ctx.fillStyle = color;
         ctx.fillRect(swatchX, swatchY, swatchW, swatchH);
         ctx.strokeStyle = '#444';
         ctx.lineWidth = 0.5;
         ctx.strokeRect(swatchX, swatchY, swatchW, swatchH);
 
-        // Hex label next to swatch
         ctx.fillStyle = '#333';
         ctx.font = labelFontSmall;
         ctx.textAlign = 'right';
@@ -194,7 +248,7 @@ export class LayerExporter {
 
             // Page number centered at bottom
             pdf.setFontSize(7);
-            pdf.setTextColor(150);
+            pdf.setTextColor(150, 150, 150);
             pdf.text(
                 `Strona ${i + 1} / ${n}`,
                 paper.w / 2,

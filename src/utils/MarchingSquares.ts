@@ -1,6 +1,18 @@
 /**
- * Marching Squares algorithm — extracts 2D contour paths from a heightmap at a given threshold.
+ * Proper Marching Squares implementation with segment stitching.
+ *
+ * Key design: the heightmap is padded with a 1-cell border of zeros before
+ * running MS. This guarantees every contour closes properly — if terrain
+ * reaches the grid edge, the zero-border forces the contour to close along
+ * the boundary rather than producing open "dangling" segments.
+ *
+ * Pipeline:
+ *   1. Pad grid with zeros (size w+2 × h+2)
+ *   2. Collect edge segments from all 2×2 cells (with sub-pixel interpolation)
+ *   3. Stitch segments into closed polygons via endpoint adjacency map
+ *   4. Shift coordinates back by -1 to restore original grid space
  */
+
 export interface Point2D {
     x: number;
     y: number;
@@ -8,13 +20,103 @@ export interface Point2D {
 
 export type Contour = Point2D[];
 
+/** A raw edge segment: two interpolated points on adjacent cell edges */
+interface Segment {
+    a: Point2D;
+    b: Point2D;
+}
+
+// ─── Lookup table ─────────────────────────────────────────────────────────────
+// For each of the 16 MS configs, which pairs of cell-edge indices to connect.
+// Edge indices: 0=top, 1=right, 2=bottom, 3=left
+// Cases 5 and 10 are saddle points — resolved separately using cell-center.
+const MS_EDGES: Record<number, [number, number][]> = {
+    0: [],
+    1: [[3, 2]],
+    2: [[2, 1]],
+    3: [[3, 1]],
+    4: [[0, 1]],
+    5: [],        // saddle — handled below
+    6: [[0, 2]],
+    7: [[0, 3]],
+    8: [[0, 3]],
+    9: [[0, 2]],
+    10: [],        // saddle — handled below
+    11: [[0, 1]],
+    12: [[3, 1]],
+    13: [[2, 1]],
+    14: [[3, 2]],
+    15: [],
+};
+
+// Corner offsets [dx, dy] for corner index: 0=TL, 1=TR, 2=BR, 3=BL
+const CORNER_OFFSET: [number, number][] = [
+    [0, 0], // TL
+    [1, 0], // TR
+    [1, 1], // BR
+    [0, 1], // BL
+];
+
+// Edge corners: edge index → [cornerA, cornerB]
+const EDGE_CORNERS: [number, number][] = [
+    [0, 1], // edge 0 = top
+    [1, 2], // edge 1 = right
+    [3, 2], // edge 2 = bottom
+    [0, 3], // edge 3 = left
+];
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function getPaddedVal(grid: Float32Array, width: number, x: number, y: number): number {
+    return grid[y * width + x] ?? 0;
+}
+
 /**
- * Extract contours at a specific height threshold from a 2D grid of heights.
- * @param grid - 2D array of height values (row-major).
- * @param width - number of columns
- * @param height - number of rows
- * @param threshold - height value at which to extract contour
- * @returns Array of contour polylines
+ * Interpolated point on a cell edge (sub-pixel accuracy).
+ * Works in padded-grid coordinates.
+ */
+function edgeMidpointPadded(
+    grid: Float32Array,
+    width: number,
+    cx: number,
+    cy: number,
+    edgeIdx: number,
+    threshold: number
+): Point2D {
+    const [c0, c1] = EDGE_CORNERS[edgeIdx];
+    const [dx0, dy0] = CORNER_OFFSET[c0];
+    const [dx1, dy1] = CORNER_OFFSET[c1];
+
+    const x0 = cx + dx0, y0 = cy + dy0;
+    const x1 = cx + dx1, y1 = cy + dy1;
+
+    const v0 = getPaddedVal(grid, width, x0, y0);
+    const v1 = getPaddedVal(grid, width, x1, y1);
+
+    let t = 0.5;
+    if (Math.abs(v1 - v0) > 1e-6) t = (threshold - v0) / (v1 - v0);
+    t = Math.max(0, Math.min(1, t));
+
+    return {
+        x: x0 + t * (x1 - x0),
+        y: y0 + t * (y1 - y0),
+    };
+}
+
+/** Point key with 4-decimal precision for endpoint matching */
+function ptKey(p: Point2D): string {
+    return `${p.x.toFixed(4)},${p.y.toFixed(4)}`;
+}
+
+// ─── Main export ──────────────────────────────────────────────────────────────
+
+/**
+ * Extract closed contour polygons from a heightmap at a given threshold.
+ *
+ * The grid is internally padded with a 1-cell border of zeros before running
+ * Marching Squares. This guarantees that any contour reaching the original
+ * grid boundary will close properly — no open "dangling" segments.
+ * Returned coordinates are in the original grid space (0 … width-1, 0 … height-1).
  */
 export function marchingSquares(
     grid: Float32Array,
@@ -22,180 +124,137 @@ export function marchingSquares(
     height: number,
     threshold: number
 ): Contour[] {
-    const contours: Contour[] = [];
-    const visited = new Set<string>();
+    // ── 1. Pad with a 1-cell border of zeros ──────────────────────────────
+    const pw = width + 2;
+    const ph = height + 2;
+    const padded = new Float32Array(pw * ph); // zero-initialized
 
-    for (let y = 0; y < height - 1; y++) {
-        for (let x = 0; x < width - 1; x++) {
-            const key = `${x},${y}`;
-            if (visited.has(key)) continue;
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            padded[(y + 1) * pw + (x + 1)] = grid[y * width + x];
+        }
+    }
 
-            const config = getConfig(grid, width, x, y, threshold);
+    // ── 2. Collect segments from the padded grid ──────────────────────────
+    const segments: Segment[] = [];
+
+    for (let cy = 0; cy < ph - 1; cy++) {
+        for (let cx = 0; cx < pw - 1; cx++) {
+            const tl = padded[cy * pw + cx];
+            const tr = padded[cy * pw + cx + 1];
+            const br = padded[(cy + 1) * pw + cx + 1];
+            const bl = padded[(cy + 1) * pw + cx];
+
+            let config = 0;
+            if (tl >= threshold) config |= 8;
+            if (tr >= threshold) config |= 4;
+            if (br >= threshold) config |= 2;
+            if (bl >= threshold) config |= 1;
+
             if (config === 0 || config === 15) continue;
 
-            // Trace a contour starting from this cell
-            const contour = traceContour(grid, width, height, x, y, threshold, visited);
-            if (contour.length > 2) {
-                contours.push(contour);
+            // Saddle points: use cell-center average to disambiguate
+            if (config === 5 || config === 10) {
+                const center = (tl + tr + br + bl) / 4;
+                if (config === 5) {
+                    if (center >= threshold) {
+                        segments.push({ a: edgeMidpointPadded(padded, pw, cx, cy, 0, threshold), b: edgeMidpointPadded(padded, pw, cx, cy, 3, threshold) });
+                        segments.push({ a: edgeMidpointPadded(padded, pw, cx, cy, 1, threshold), b: edgeMidpointPadded(padded, pw, cx, cy, 2, threshold) });
+                    } else {
+                        segments.push({ a: edgeMidpointPadded(padded, pw, cx, cy, 0, threshold), b: edgeMidpointPadded(padded, pw, cx, cy, 1, threshold) });
+                        segments.push({ a: edgeMidpointPadded(padded, pw, cx, cy, 2, threshold), b: edgeMidpointPadded(padded, pw, cx, cy, 3, threshold) });
+                    }
+                } else {
+                    if (center >= threshold) {
+                        segments.push({ a: edgeMidpointPadded(padded, pw, cx, cy, 0, threshold), b: edgeMidpointPadded(padded, pw, cx, cy, 1, threshold) });
+                        segments.push({ a: edgeMidpointPadded(padded, pw, cx, cy, 2, threshold), b: edgeMidpointPadded(padded, pw, cx, cy, 3, threshold) });
+                    } else {
+                        segments.push({ a: edgeMidpointPadded(padded, pw, cx, cy, 0, threshold), b: edgeMidpointPadded(padded, pw, cx, cy, 3, threshold) });
+                        segments.push({ a: edgeMidpointPadded(padded, pw, cx, cy, 1, threshold), b: edgeMidpointPadded(padded, pw, cx, cy, 2, threshold) });
+                    }
+                }
+                continue;
+            }
+
+            for (const [e0, e1] of MS_EDGES[config]) {
+                segments.push({
+                    a: edgeMidpointPadded(padded, pw, cx, cy, e0, threshold),
+                    b: edgeMidpointPadded(padded, pw, cx, cy, e1, threshold),
+                });
             }
         }
     }
 
-    return contours;
+    // ── 3. Stitch into closed polygons ────────────────────────────────────
+    const contours = stitchSegments(segments);
+
+    // ── 4. Shift coordinates back: padded space → original grid space ─────
+    return contours.map(c => c.map(p => ({ x: p.x - 1, y: p.y - 1 })));
 }
 
-function getVal(grid: Float32Array, width: number, x: number, y: number): number {
-    return grid[y * width + x];
-}
+// ─── Segment stitching ────────────────────────────────────────────────────────
 
-function getConfig(grid: Float32Array, width: number, x: number, y: number, threshold: number): number {
-    let config = 0;
-    if (getVal(grid, width, x, y) >= threshold) config |= 8;
-    if (getVal(grid, width, x + 1, y) >= threshold) config |= 4;
-    if (getVal(grid, width, x + 1, y + 1) >= threshold) config |= 2;
-    if (getVal(grid, width, x, y + 1) >= threshold) config |= 1;
-    return config;
-}
+/**
+ * Stitches a flat list of segments (segment soup) into ordered closed polygons.
+ * Uses an endpoint → segment adjacency map.
+ */
+function stitchSegments(segments: Segment[]): Contour[] {
+    if (segments.length === 0) return [];
 
-function interpolate(v1: number, v2: number, threshold: number): number {
-    if (Math.abs(v2 - v1) < 0.0001) return 0.5;
-    return (threshold - v1) / (v2 - v1);
-}
+    const adjacency = new Map<string, number[]>();
 
-function traceContour(
-    grid: Float32Array,
-    width: number,
-    height: number,
-    startX: number,
-    startY: number,
-    threshold: number,
-    visited: Set<string>
-): Contour {
-    const contour: Contour = [];
-    let cx = startX;
-    let cy = startY;
-    const maxIter = width * height;
-    let iter = 0;
+    const addToMap = (key: string, idx: number) => {
+        const list = adjacency.get(key);
+        if (list) list.push(idx);
+        else adjacency.set(key, [idx]);
+    };
 
-    while (iter++ < maxIter) {
-        if (cx < 0 || cy < 0 || cx >= width - 1 || cy >= height - 1) break;
+    for (let i = 0; i < segments.length; i++) {
+        addToMap(ptKey(segments[i].a), i);
+        addToMap(ptKey(segments[i].b), i);
+    }
 
-        const key = `${cx},${cy}`;
-        if (visited.has(key) && contour.length > 2) break;
-        visited.add(key);
+    const used = new Uint8Array(segments.length);
+    const contours: Contour[] = [];
 
-        const config = getConfig(grid, width, cx, cy, threshold);
-        if (config === 0 || config === 15) break;
+    for (let start = 0; start < segments.length; start++) {
+        if (used[start]) continue;
 
-        const tl = getVal(grid, width, cx, cy);
-        const tr = getVal(grid, width, cx + 1, cy);
-        const br = getVal(grid, width, cx + 1, cy + 1);
-        const bl = getVal(grid, width, cx, cy + 1);
+        const contour: Point2D[] = [];
+        let currentPt = segments[start].a;
+        let currentSeg = start;
 
-        let px: number, py: number;
+        while (true) {
+            if (used[currentSeg]) break;
+            used[currentSeg] = 1;
 
-        // Get the interpolated edge point for each configuration
-        switch (config) {
-            case 1: case 14:
-                px = cx + 0;
-                py = cy + interpolate(tl, bl, threshold);
-                contour.push({ x: px, y: py });
-                px = cx + interpolate(bl, br, threshold);
-                py = cy + 1;
-                contour.push({ x: px, y: py });
+            contour.push(currentPt);
+
+            const seg = segments[currentSeg];
+            const otherPt = ptKey(currentPt) === ptKey(seg.a) ? seg.b : seg.a;
+            currentPt = otherPt;
+
+            const neighbours = adjacency.get(ptKey(currentPt)) ?? [];
+            let nextSeg = -1;
+            for (const n of neighbours) {
+                if (!used[n]) {
+                    nextSeg = n;
+                    break;
+                }
+            }
+
+            if (nextSeg === -1) {
+                contour.push(currentPt);
                 break;
-            case 2: case 13:
-                px = cx + interpolate(bl, br, threshold);
-                py = cy + 1;
-                contour.push({ x: px, y: py });
-                px = cx + 1;
-                py = cy + interpolate(tr, br, threshold);
-                contour.push({ x: px, y: py });
-                break;
-            case 3: case 12:
-                px = cx + 0;
-                py = cy + interpolate(tl, bl, threshold);
-                contour.push({ x: px, y: py });
-                px = cx + 1;
-                py = cy + interpolate(tr, br, threshold);
-                contour.push({ x: px, y: py });
-                break;
-            case 4: case 11:
-                px = cx + interpolate(tl, tr, threshold);
-                py = cy + 0;
-                contour.push({ x: px, y: py });
-                px = cx + 1;
-                py = cy + interpolate(tr, br, threshold);
-                contour.push({ x: px, y: py });
-                break;
-            case 6: case 9:
-                px = cx + interpolate(tl, tr, threshold);
-                py = cy + 0;
-                contour.push({ x: px, y: py });
-                px = cx + interpolate(bl, br, threshold);
-                py = cy + 1;
-                contour.push({ x: px, y: py });
-                break;
-            case 7: case 8:
-                px = cx + interpolate(tl, tr, threshold);
-                py = cy + 0;
-                contour.push({ x: px, y: py });
-                px = cx + 0;
-                py = cy + interpolate(tl, bl, threshold);
-                contour.push({ x: px, y: py });
-                break;
-            case 5:
-                px = cx + interpolate(tl, tr, threshold);
-                py = cy + 0;
-                contour.push({ x: px, y: py });
-                px = cx + 1;
-                py = cy + interpolate(tr, br, threshold);
-                contour.push({ x: px, y: py });
-                break;
-            case 10:
-                px = cx + 0;
-                py = cy + interpolate(tl, bl, threshold);
-                contour.push({ x: px, y: py });
-                px = cx + interpolate(bl, br, threshold);
-                py = cy + 1;
-                contour.push({ x: px, y: py });
-                break;
-            default:
-                break;
+            }
+
+            currentSeg = nextSeg;
         }
 
-        // Simple directional walk — move to next cell
-        switch (config) {
-            case 1: case 3: case 5: case 13: cx--; break;
-            case 2: case 10: case 12: cy++; break;
-            case 4: case 6: case 14: cx++; break;
-            case 7: case 8: case 11: cy--; break;
-            case 9: cy--; break;
-            default: cx++; break;
+        if (contour.length >= 3) {
+            contours.push(contour);
         }
     }
 
-    return contour;
-}
-
-/**
- * Generate a filled polygon (flood-fill style) for a layer between minH and maxH.
- * Returns the path of the layer outline suitable for drawing/export.
- */
-export function getLayerOutline(
-    grid: Float32Array,
-    gridW: number,
-    gridH: number,
-    minThreshold: number,
-    _maxThreshold: number,
-    terrainW: number,
-    terrainD: number
-): Contour[] {
-    const contours = marchingSquares(grid, gridW, gridH, minThreshold);
-    // Scale contour points from grid space to real mm space
-    const scaleX = terrainW / (gridW - 1);
-    const scaleY = terrainD / (gridH - 1);
-    return contours.map(c =>
-        c.map(p => ({ x: p.x * scaleX, y: p.y * scaleY }))
-    );
+    return contours;
 }
